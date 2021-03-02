@@ -1,0 +1,17 @@
+---
+- name: Creates directory
+  file:
+    path: ~/web
+    state: directory
+
+- name: Copy backend files
+  copy:
+    src: "~/project/.circleci/ansible/deploy/files/artifact.tar.gz"
+    dest: "~/"
+    
+- name: Executing node
+  shell: |
+    tar -xf artifact.tar.gz
+    sudo npm run prestart:prod
+    pm2 start npm --no-automation --name "backend" -- run start
+    rm artifact.tar.gz
