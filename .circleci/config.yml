@@ -405,15 +405,64 @@ jobs:
           name: Frontend smoke test
           command: |
             URL="http://udapeople-${CIRCLE_WORKFLOW_ID:0:7}.s3-website-us-east-1.amazonaws.com"
-            if curl -s ${URL} | grep "Welcome"
+            if curl -s ${URL} | grep -q "Welcome"
             then
-              exit 1
+              exit 0
             else
               exit 1
             fi
       - destroy-environment
       - install-nodejs-amzn
       - revert-migrations
+
+  cloudfront-update:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - run:
+          name: Saved old WorkflowID
+          command: |
+
+            OldWorkflowID=$(aws cloudformation \
+                list-exports --query "Exports[?Name==\`WorkflowID\`].Value" \
+                --no-paginate --output text)
+
+            curl -H "Content-Type: text/plain" -H "token: ${MEMSTASH_TOKEN}" --request PUT --data ${OldWorkflowID} https://api.memstash.io/values/OldWorkflowID_${CIRCLE_WORKFLOW_ID}
+
+      - run:
+          name: Update cloudfront distribution
+          command: |
+
+            aws cloudformation deploy \
+              --template-file .circleci/files/cloudfront.yml \
+              --tags workflowID=${CIRCLE_WORKFLOW_ID:0:7} \
+              --stack-name ${CLOUDFRONT_STACKNAME} \
+              --parameter-overrides WorkflowID="${CIRCLE_WORKFLOW_ID:0:7}"
+      - destroy-environment
+      - install-nodejs-amzn
+      - revert-migrations
+
+  cleanup:
+      docker:
+        - image: amazon/aws-cli
+      steps:
+        - checkout
+        - run:
+            name: Remove old stacks and files
+            command: |
+
+              OldWorkflowID=$(curl -H "token: ${MEMSTASH_TOKEN}" --request GET https://api.memstash.io/values/OldWorkflowID_${CIRCLE_WORKFLOW_ID})
+
+              STACKS=($(aws cloudformation list-stacks --query "StackSummaries[*].StackName" \
+                --stack-status-filter CREATE_COMPLETE --no-paginate --output text))
+
+              if [[ "${STACKS[@]}" =~ "${OldWorkflowID}" ]]
+              then
+                aws s3 rm s3://udapeople-${OldWorkflowID} --recursive
+                aws cloudformation delete-stack --stack-name frontend-stack-${OldWorkflowID}
+                aws cloudformation delete-stack --stack-name backend-stack-${OldWorkflowID}
+              fi
 
 workflows:
   default:
@@ -463,3 +512,9 @@ workflows:
           requires:
             - deploy-backend
             - deploy-frontend
+      - cloudfront-update:
+          requires:
+            - smoke-test
+      - cleanup:
+          requires:
+            - cloudfront-update
