@@ -35,32 +35,35 @@ commands:
               npm run migrations:revert
             fi
 
-  install-awscli-slim:
-    description: Install the aws cli on python docker image
+  install-ansible-dependencies:
+    description: Install dependencies for ansible use in circleci/python image
     steps:
       - run:
-          name: Install dependences to install awscli
-          when: on_fail
+          name: Install dependencies
           command: |
-            apt update && apt install curl unzip -y
-      - run:
-          name: Install awscli
-          when: on_fail
-          command: |
-            curl "${AWSCLI2_FILE_URL}" -o "awscliv2.zip"
-            unzip awscliv2.zip
-            ./aws/install && rm -rf ./aws ./awscliv2.zip
+            python -m venv ~/venv
+            source ~/venv/bin/activate
+            python -m pip install ansible
 
-  install-awscli-npm:
-    description: Install curl on python docker image
+  install-awscli-circleci:
+    description: Install aws cli on circleci docker images
     steps:
       - run:
           name: Install awscli
           when: on_fail
           command: |
             sudo curl "${AWSCLI2_FILE_URL}" -o "awscliv2.zip"
-            sudo unzip awscliv2.zip
-            sudo ./aws/install && sudo rm -rf ./aws ./awscliv2.zip
+            unzip awscliv2.zip
+            sudo ./aws/install && rm -rf ./aws ./awscliv2.zip
+
+  install-nodejs-circleci:
+    description: Install nodejs on circleci/python image
+    steps:
+      - run:
+          name: Install nodejs on circleci/python image
+          command: |
+            curl -fsSL https://deb.nodesource.com/setup_14.x | sudo bash -
+            sudo apt-get install -y nodejs
 
   install-nodejs-amzn:
     description: Install nodejs on amazon awscli docker image
@@ -201,20 +204,26 @@ jobs:
 
   configure-infrastructure:
     docker:
-      - image: python:slim
+      - image: circleci/python
     steps:
       - checkout
       - add_ssh_keys:
           fingerprints: ["7d:8e:b2:55:fb:be:78:07:b8:55:64:b3:a2:a2:8f:1a"]
       - attach_workspace:
           at: /tmp/workspace
-      - run:
-          name: Install dependencies
-          command: |
-            apt update && apt install ansible -y
+      - restore_cache:
+          keys:
+            - ansible-dependencies-${CACHE_VER}
+      - install-ansible-dependencies
+      - save_cache:
+          paths:
+            - ~/venv
+          key: ansible-dependencies-${CACHE_VER}
       - run:
           name: Configure server
           command: |
+            source ~/venv/bin/activate
+            export ANSIBLE_HOST_KEY_CHECKING=False
             ansible-playbook -i /tmp/workspace/inventory.txt \
               --extra-vars \
                  "ENVIRONMENT=${ENVIRONMENT} \
@@ -226,7 +235,7 @@ jobs:
                   TYPEORM_PASSWORD=${TYPEORM_PASSWORD} \
                   TYPEORM_DATABASE=${TYPEORM_DATABASE}" \
               .circleci/ansible/configure-server.yml
-      - install-awscli-slim
+      - install-awscli-circleci
       - destroy-environment
 
   run-migrations:
@@ -264,7 +273,7 @@ jobs:
             fi
 
             curl -H "Content-Type: text/plain" -H "token: ${MEMSTASH_TOKEN}" --request PUT --data $FLAG https://api.memstash.io/values/migration_${CIRCLE_WORKFLOW_ID}
-      - install-awscli-npm
+      - install-awscli-circleci
       - destroy-environment
       - revert-migrations
 
@@ -295,7 +304,7 @@ jobs:
           root: .
           paths:
             - frontend/dist
-      - install-awscli-npm
+      - install-awscli-circleci
       - destroy-environment
       - revert-migrations
 
@@ -340,38 +349,39 @@ jobs:
           root: .
           paths:
             - backend
-      - install-awscli-npm
+      - install-awscli-circleci
       - destroy-environment
       - revert-migrations
 
   deploy-backend:
     docker:
-      - image: python:slim
+      - image: circleci/python
     steps:
       - checkout
       - add_ssh_keys:
           fingerprints: ["7d:8e:b2:55:fb:be:78:07:b8:55:64:b3:a2:a2:8f:1a"]
       - attach_workspace:
           at: /tmp/workspace
-      - run:
-          name: Install dependencies
-          command: |
-            apt update && apt install ansible -y
-      - run:
-          name: Add production env vars to .env file
-          command: |
-            echo "ENVIROMENT=production" >> /tmp/workspace/backend/.env
-            echo "NODE_ENV=production" >> /tmp/workspace/backend/.env
+      - restore_cache:
+          keys:
+            - ansible-dependencies-{CACHE_VER}
+      - install-ansible-dependencies
+      - save_cache:
+          paths:
+            - ~/venv
+          key: ansible-dependencies-${CACHE_VER}
       - run:
           name: Deploy backend
           command: |
+            source ~/venv/bin/activate
             tar -C /tmp/workspace/backend -czvf artifact.tar.gz .
             mkdir -p .circleci/ansible/deploy/files
             mv artifact.tar.gz .circleci/ansible/deploy/files/
             export ANSIBLE_HOST_KEY_CHECKING=False
             ansible-playbook -i /tmp/workspace/inventory.txt \
               .circleci/ansible/deploy-backend.yml
-      - install-awscli-slim
+      - install-awscli-circleci
+      - install-nodejs-circleci
       - destroy-environment
       - revert-migrations
 
@@ -444,25 +454,25 @@ jobs:
       - revert-migrations
 
   cleanup:
-      docker:
-        - image: amazon/aws-cli
-      steps:
-        - checkout
-        - run:
-            name: Remove old stacks and files
-            command: |
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - run:
+          name: Remove old stacks and files
+          command: |
 
-              OldWorkflowID=$(curl -H "token: ${MEMSTASH_TOKEN}" --request GET https://api.memstash.io/values/OldWorkflowID_${CIRCLE_WORKFLOW_ID})
+            OldWorkflowID=$(curl -H "token: ${MEMSTASH_TOKEN}" --request GET https://api.memstash.io/values/OldWorkflowID_${CIRCLE_WORKFLOW_ID})
 
-              STACKS=($(aws cloudformation list-stacks --query "StackSummaries[*].StackName" \
-                --stack-status-filter CREATE_COMPLETE --no-paginate --output text))
+            STACKS=($(aws cloudformation list-stacks --query "StackSummaries[*].StackName" \
+              --stack-status-filter CREATE_COMPLETE --no-paginate --output text))
 
-              if [[ "${STACKS[@]}" =~ "${OldWorkflowID}" ]]
-              then
-                aws s3 rm s3://udapeople-${OldWorkflowID} --recursive
-                aws cloudformation delete-stack --stack-name frontend-stack-${OldWorkflowID}
-                aws cloudformation delete-stack --stack-name backend-stack-${OldWorkflowID}
-              fi
+            if [[ "${STACKS[@]}" =~ "${OldWorkflowID}" ]]
+            then
+              aws s3 rm s3://udapeople-${OldWorkflowID} --recursive
+              aws cloudformation delete-stack --stack-name frontend-stack-${OldWorkflowID}
+              aws cloudformation delete-stack --stack-name backend-stack-${OldWorkflowID}
+            fi
 
 workflows:
   default:

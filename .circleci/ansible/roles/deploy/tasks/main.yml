@@ -1,17 +1,52 @@
 ---
-- name: Creates directory
-  file:
-    path: ~/web
-    state: directory
-
 - name: Copy backend files
-  copy:
+  ansible.builtin.unarchive:
     src: "~/project/.circleci/ansible/deploy/files/artifact.tar.gz"
     dest: "~/"
-    
-- name: Executing node
+
+- name: run prestart
+  become: yes
   shell: |
-    tar -xf artifact.tar.gz
-    sudo npm run prestart:prod
-    pm2 start npm --no-automation --name "backend" -- run start
-    rm artifact.tar.gz
+    npm run prestart:prod
+
+- name: Download and extract node exporter
+  become: yes
+  shell: |
+    useradd --no-create-home node_exporter
+    wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+    tar xzf node_exporter-1.0.1.linux-amd64.tar.gz
+    cp node_exporter-1.0.1.linux-amd64/node_exporter /usr/local/bin/node_exporter
+    rm -rf node_exporter-1.0.1.linux-amd64.tar.gz node_exporter-1.0.1.linux-amd64
+
+- name: Create service file
+  become: yes
+  copy:
+    dest: "/etc/systemd/system/node-exporter.service"
+    content: |
+      [Unit]
+      Description=Prometheus Node Exporter Service
+      After=network.target
+
+      [Service]
+      User=node_exporter
+      Group=node_exporter
+      Type=simple
+      ExecStart=/usr/local/bin/node_exporter
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: reload system daemon
+  become: yes
+  shell: |
+    systemctl daemon-reload
+
+- name: start backend
+  become: yes
+  command: /usr/local/bin/pm2 start npm --no-automation --name "backend" -- run start
+
+- name: Executing node
+  become: yes
+  shell: |
+    systemctl enable node-exporter
+    systemctl start node-exporter
