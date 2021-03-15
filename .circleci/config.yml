@@ -61,6 +61,7 @@ commands:
     steps:
       - run:
           name: Install nodejs on circleci/python image
+          when: on_fail
           command: |
             curl -fsSL https://deb.nodesource.com/setup_14.x | sudo bash -
             sudo apt-get install -y nodejs
@@ -104,7 +105,6 @@ jobs:
           name: Back-end build
           command: |
             cd backend
-            npm i
             npm run build
       - save_cache:
           paths: [backend/node_modules]
@@ -162,6 +162,7 @@ jobs:
           name: scan backend
           command: |
             cd backend
+            npm i
             npm audit --audit-level=critical
 
   deploy-infrastructure:
@@ -240,7 +241,7 @@ jobs:
 
   run-migrations:
     docker:
-      - image: circleci/node:13.8.0
+      - image: cimg/node:10.19.0
     steps:
       - checkout
       - run:
@@ -255,6 +256,7 @@ jobs:
             echo "TYPEORM_DATABASE=${TYPEORM_DATABASE}" >> .env
             echo "TYPEORM_MIGRATIONS=${TYPEORM_MIGRATIONS}" >> .env
             echo "TYPEORM_ENTITIES=${TYPEORM_ENTITIES}" >> .env
+            npm rebuild
             npm i
             npm run migrations | tee ~/migration-output.txt
       - persist_to_workspace:
@@ -279,7 +281,7 @@ jobs:
 
   build-frontend-deployment:
     docker:
-      - image: circleci/node:13.8.0
+      - image: cimg/node:10.19.0
     steps:
       - checkout
       - attach_workspace:
@@ -299,6 +301,7 @@ jobs:
           command: |
               cd frontend
               npm i
+              npm rebuild
               npm run build
       - persist_to_workspace:
           root: .
@@ -340,10 +343,9 @@ jobs:
           command: |
             mv /tmp/workspace/.env backend/.env
       - run:
-          name: Build frontend objects
+          name: Build backend objects
           command: |
             cd backend
-            npm i
             npm run build
       - persist_to_workspace:
           root: .
@@ -364,7 +366,7 @@ jobs:
           at: /tmp/workspace
       - restore_cache:
           keys:
-            - ansible-dependencies-{CACHE_VER}
+            - ansible-dependencies-${CACHE_VER}
       - install-ansible-dependencies
       - save_cache:
           paths:
@@ -379,7 +381,7 @@ jobs:
             mv artifact.tar.gz .circleci/ansible/deploy/files/
             export ANSIBLE_HOST_KEY_CHECKING=False
             ansible-playbook -i /tmp/workspace/inventory.txt \
-              .circleci/ansible/deploy-backend.yml
+              .circleci/ansible/deploy-backend.yml -vv
       - install-awscli-circleci
       - install-nodejs-circleci
       - destroy-environment

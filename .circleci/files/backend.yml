@@ -29,11 +29,11 @@ Resources:
   EC2Instance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t2.micro
+      InstanceType: t2.medium
       SecurityGroups:
         - Ref: InstanceSecurityGroup
       KeyName: test
-      ImageId: ami-00ddb0e5626798373
+      ImageId: ami-042e8287309f5df03
       Tags:
         - Key: Name
           Value: !Sub backend-${ID}

@@ -41,6 +41,11 @@
   shell: |
     systemctl daemon-reload
 
+- name: check dependencies
+  shell: |
+    npm rebuild
+    npm i
+
 - name: start backend
   become: yes
   command: /usr/local/bin/pm2 start npm --no-automation --name "backend" -- run start
